@@ -75,4 +75,90 @@ if not daily_data.empty:
         {"desc": "150MA > 200MA (長線趨勢排列正確)", "status": last_daily['150MA'] > last_daily['200MA']},
         {"desc": "200MA 趨勢向上 (與一個月前相比)", "status": last_daily['200MA'] > daily_data['MA200_Past'].iloc[-1]},
         {"desc": "50MA > 150MA 與 200MA (中線動能加速)", "status": last_daily['50MA'] > last_daily['150MA'] and last_daily['50MA'] > last_daily['200MA']},
-        {"desc": "
+        {"desc": "價格 > 50MA (短期不破位)", "status": cur_p > last_daily['50MA']},
+        {"desc": "比 52 週最低點高出至少 30% (已脫離底部區)", "status": cur_p > lo52 * 1.30},
+        {"desc": "距離 52 週最高點在 25% 以內 (處於高位強勢整理)", "status": cur_p > hi52 * 0.75}
+    ]
+    pass_count = sum([c['status'] for c in criteria])
+    st.subheader(f"📋 Minervini 趨勢模板詳細檢查 (總分：{pass_count} / 7)")
+    with st.expander("展開查看詳細清單", expanded=True):
+        col_ch, col_info = st.columns([2, 1])
+        with col_ch:
+            for c in criteria:
+                icon = "✅" if c['status'] else "❌"
+                st.write(f"{icon} {c['desc']}")
+        with col_info:
+            if all([c['status'] for c in criteria]):
+                st.success(f"🔥 {ticker_symbol} 符合完整 Stage 2 趨勢模板條件！")
+            else:
+                st.warning(f"⚠️ {ticker_symbol} 未完全符合，請注意檢查細節。")
+
+    # --- 主要看盤區 (牛牛 APP 風格) ---
+    st.subheader("📡 專業看盤區")
+    
+    # 建立時間選擇分頁 (日K, 周K, 月K) - 跟截圖一模一樣！
+    tab_d, tab_w, tab_m = st.tabs(["日K", "周K", "月K"])
+
+    def create_niuniu_chart(ticker, plot_period, plot_interval):
+        """根據選擇的時間週期，建立牛牛風格的互動式圖表"""
+        # 抓取並處理數據
+        # 日K使用 2y, 周K使用 5y (以滿足 200 週期 MA), 月K使用 20y (或 max)
+        actual_period = "2y" if plot_interval == "1d" else "5y" if plot_interval == "1wk" else "20y"
+        data = load_and_process_data(ticker, period=actual_period, interval=plot_interval)
+
+        if not data.empty:
+            df_plot = data.tail(days=int(plot_period.replace("d", ""))) if plot_interval == "1d" else data
+            
+            # --- 建立專業版畫布 (上下子圖，共享 X 軸) ---
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                               vertical_spacing=0.03, subplot_titles=(f'{ticker} {plot_interval.replace("1d", "日").replace("1wk", "周").replace("1mo", "月")}K 走勢', '成交量與 50 週期均量線'), 
+                               row_width=[0.2, 0.7])
+
+            # 1. 上方子圖：專業 K 線圖 (K線 + 三條 MA + 懸停詳細資訊)
+            fig.add_trace(go.Candlestick(
+                x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
+                low=df_plot['Low'], close=df_plot['Close'], name='K線',
+                increasing_line_color='#ef5350', decreasing_line_color='#26a69a'
+            ), row=1, col=1)
+
+            # 疊加均線 (顏色依照截圖指定)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['50MA'], name='50MA (藍)', line=dict(color='blue', width=1.5), mode='lines', hoverinfo='none'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['150MA'], name='150MA (黃)', line=dict(color='yellow', width=1.5), mode='lines', hoverinfo='none'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['200MA'], name='200MA (紅)', line=dict(color='red', width=2), mode='lines', hoverinfo='none'), row=1, col=1)
+
+            # 2. 下方子圖：專業成交量圖 (成交量柱狀圖 + 50MA 透明橙色線)
+            vol_colors = ['#ef5350' if row['Open'] > row['Close'] else '#26a69a' for _, row in df_plot.iterrows()]
+            fig.add_trace(go.Bar(x=df_plot.index, y=df_plot['Volume'], name='成交量', marker_color=vol_colors, hoverinfo='none'), row=2, col=1)
+
+            # 疊加半透明淺橙色均量線
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Vol_50MA'], name='成交量 50MA', 
+                                    line=dict(color='rgba(255, 165, 0, 0.6)', width=2), mode='lines'), row=2, col=1)
+
+            # --- 完美匹配懸停行為：游標碰到 K 線就顯示詳細日期與數值 ---
+            fig.update_layout(
+                height=700, 
+                xaxis_rangeslider_visible=False, 
+                template="plotly_dark",
+                # 'x unified' 模式會自動建立垂直對齊線，並在統一的懸停框中顯示所有數據，包括日期
+                hovermode="x unified", 
+                # 自訂懸停框的樣式與內容
+                hoverlabel=dict(bgcolor="black", font_size=12, font_family="Arial"),
+                margin=dict(t=30, b=10, l=20, r=20)
+            )
+            return fig
+        return go.Figure()
+
+    # 在各個分頁中放置圖表
+    with tab_d:
+        # 日K設定：顯示 252 天 (約1年數據)
+        fig_d = create_niuniu_chart(ticker_symbol, plot_period="252d", plot_interval="1d")
+        st.plotly_chart(fig_d, use_container_width=True)
+    with tab_w:
+        fig_w = create_niuniu_chart(ticker_symbol, plot_period="all", plot_interval="1wk")
+        st.plotly_chart(fig_w, use_container_width=True)
+    with tab_m:
+        fig_m = create_niuniu_chart(ticker_symbol, plot_period="all", plot_interval="1mo")
+        st.plotly_chart(fig_m, use_container_width=True)
+
+else:
+    st.error("無法取得數據或無法計算 200 週期 MA，請確認代號或嘗試上市更久的股票。")
