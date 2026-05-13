@@ -10,7 +10,7 @@ import requests
 # 1. 系統核心設定
 # ==========================================
 APP_NAME = "超級績效 智能趨勢選股系統"
-VERSION = "V24"
+VERSION = "V25"
 
 st.set_page_config(page_title=f"{APP_NAME} {VERSION}", layout="wide")
 st.title(f"📈 {APP_NAME} {VERSION}")
@@ -32,12 +32,11 @@ if st.sidebar.button("♻️ 強制清空緩存並重整"):
     st.rerun()
 
 # ==========================================
-# 2. 數據抓取引擎 (含備援機制)
+# 2. 數據抓取引擎 (含強化備援)
 # ==========================================
 
 @st.cache_data(ttl=86400)
 def fetch_sector_data():
-    """抓取標普500板塊資訊，若失敗則回傳預設分類"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -46,13 +45,8 @@ def fetch_sector_data():
         df['Symbol'] = df['Symbol'].str.replace('.', '-', regex=False)
         return df[['Symbol', 'GICS Sector']]
     except:
-        # 萬一連線失敗的備援名單
-        return pd.DataFrame([
-            {"Symbol": "AAPL", "GICS Sector": "Information Technology"},
-            {"Symbol": "NVDA", "GICS Sector": "Information Technology"},
-            {"Symbol": "JPM", "GICS Sector": "Financials"},
-            {"Symbol": "XOM", "GICS Sector": "Energy"}
-        ])
+        # 基本備援
+        return pd.DataFrame([{"Symbol": "AAPL", "GICS Sector": "Information Technology"}])
 
 @st.cache_data(ttl=3600)
 def get_spy_bench():
@@ -65,23 +59,18 @@ SPY_6M = get_spy_bench()
 
 @st.cache_data(ttl=3600)
 def get_sepa_data(ticker):
-    """抓取技術與基本面數據"""
     try:
         s = yf.Ticker(ticker)
         df = s.history(period="2y", interval="1d")
         if df.empty or len(df) < 200: return None, None
         
-        # 指標計算
         df['50MA'] = df['Close'].rolling(50).mean()
         df['150MA'] = df['Close'].rolling(150).mean()
         df['200MA'] = df['Close'].rolling(200).mean()
         df['MA200_Past'] = df['200MA'].shift(20)
         df['Vol_50MA'] = df['Volume'].rolling(50).mean()
         
-        info = {}
-        try: info = s.info
-        except: pass
-        
+        info = s.info
         fund = {
             "eps": (info.get('earningsQuarterlyGrowth') or info.get('quarterlyEarningsGrowth') or 0) * 100,
             "rev": (info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth') or 0) * 100
@@ -90,22 +79,20 @@ def get_sepa_data(ticker):
     except: return None, None
 
 # ==========================================
-# 3. 掃描器頁面
+# 3. 掃描器頁面 (修正 KeyError 邏輯)
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
-    st.subheader("🚀 批量趨勢篩選雷達 (穩定強化版)")
+    st.subheader("🚀 批量趨勢篩選雷達 (排序功能強化版)")
     
-    # 解決 No options to select 的關鍵：確保 sectors 永遠有值
     sp_data = fetch_sector_data()
     all_sectors = sorted(sp_data['GICS Sector'].unique().tolist())
-    if not all_sectors:
-        all_sectors = ["Information Technology", "Financials", "Health Care", "Consumer Discretionary"]
 
     c1, c2 = st.columns(2)
     with c1:
-        mode = st.radio("範圍：", ["🔥 熱門精選", "🇺🇸 標普 500 全掃", "📂 標普 500 分板塊"])
+        mode = st.radio("掃描範圍：", ["🔥 熱門精選", "🇺🇸 標普 500 全掃", "📂 標普 500 分板塊"])
         target_sector = st.selectbox("選擇板塊：", all_sectors) if "分板塊" in mode else None
     with c2:
+        sort_by = st.selectbox("優先排序依據：", ["綜合潛力", "EPS成長", "營收成長", "RS強度"])
         min_s = st.slider("Minervini 分數門檻：", 4, 7, 7)
         only_rs = st.checkbox("👑 跑贏大盤 (RS > 0)", value=True)
 
@@ -129,7 +116,6 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                 last = df.iloc[-1]
                 h52, l52 = float(df.tail(252)['High'].max()), float(df.tail(252)['Low'].min())
                 
-                # 7大條件
                 conds = [
                     cur > last['150MA'] and cur > last['200MA'], last['150MA'] > last['200MA'],
                     last['200MA'] > last['MA200_Past'] if pd.notna(last['MA200_Past']) else False,
@@ -140,8 +126,8 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                 rs_val = ((cur / df['Close'].iloc[-126]) - 1 - SPY_6M) * 100 if len(df) > 126 else 0
                 
                 if score >= min_s and (rs_val > 0 if only_rs else True):
-                    # 計算綜合潛力分 (技術 40% + RS 40% + 財報 20%)
-                    potential = (score/7 * 40) + (min(rs_val, 100)/100 * 40) + (min(fund['eps'], 100)/100 * 20)
+                    # 潛力分公式優化
+                    potential = (score/7 * 40) + (min(max(rs_val, 0), 100)/100 * 40) + (min(max(fund['eps'], 0), 100)/100 * 20)
                     results.append({
                         "代號": t, "得分": score, "RS強度": round(rs_val, 1),
                         "綜合潛力": round(potential, 1), "價格": round(cur, 2),
@@ -149,9 +135,15 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                     })
             bar.progress((i + 1) / len(tickers))
         
-        st.session_state.scan_df = pd.DataFrame(results).sort_values(by="綜合潛力", ascending=False)
-        st.session_state.active_tickers = st.session_state.scan_df['代號'].tolist()
-        status.success(f"掃描完成！找到 {len(results)} 檔優質標的。")
+        # 關鍵修復：檢查 results 是否為空，避免 KeyError
+        if results:
+            st.session_state.scan_df = pd.DataFrame(results).sort_values(by=sort_by, ascending=False)
+            st.session_state.active_tickers = st.session_state.scan_df['代號'].tolist()
+            status.success(f"掃描完成！找到 {len(results)} 檔優質標的，已按『{sort_by}』排序。")
+        else:
+            st.session_state.scan_df = None
+            st.session_state.active_tickers = []
+            status.warning("當前設定範圍內，查無任何符合條件的標的。")
 
     if st.session_state.scan_df is not None:
         st.write("---")
@@ -163,7 +155,7 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
 else:
     st.sidebar.markdown("---")
     if st.session_state.active_tickers:
-        target = st.sidebar.selectbox("🎯 快速查看結果", st.session_state.active_tickers)
+        target = st.sidebar.selectbox("🎯 快速查看結果 (已同步掃描順序)", st.session_state.active_tickers)
     else:
         target = st.sidebar.text_input("🎯 手動輸入", value="NVDA").upper()
     
@@ -191,4 +183,15 @@ else:
             return fig
         
         with tabs[0]: st.plotly_chart(plot_futu(df), use_container_width=True)
-        # (周K與月K邏輯同前，為節省長度省略，實際運行會完整顯示)
+        with tabs[1]:
+            w = yf.Ticker(target).history(period="5y", interval="1wk")
+            if not w.empty:
+                for ma in [50, 150, 200]: w[f'{ma}MA'] = w['Close'].rolling(ma).mean()
+                w['Vol_50MA'] = w['Volume'].rolling(50).mean()
+                st.plotly_chart(plot_futu(w), use_container_width=True)
+        with tabs[2]:
+            m_data = yf.Ticker(target).history(period="max", interval="1mo")
+            if not m_data.empty:
+                for ma in [50, 150, 200]: m_data[f'{ma}MA'] = m_data['Close'].rolling(ma).mean()
+                m_data['Vol_50MA'] = m_data['Volume'].rolling(50).mean()
+                st.plotly_chart(plot_futu(m_data), use_container_width=True)
