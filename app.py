@@ -5,17 +5,16 @@ from plotly.subplots import make_subplots
 import pandas as pd
 
 # 頁面基礎設定
-st.set_page_config(page_title="Minervini 全自動看盤掃描系統", layout="wide")
+st.set_page_config(page_title="Minervini 美股全自動掃描系統", layout="wide")
 st.title("🦅 Mark Minervini 智能選股與專業看盤系統")
 
 # --- 側邊欄導覽 ---
 st.sidebar.header("系統導覽")
 page_mode = st.sidebar.radio("切換功能模式", ["🔍 全自動選股掃描器 (Screener)", "📊 個股詳細分析 (Chart)"])
 
-# 預設的分類精選股票池
+# 預設的美股精選池
 TECH_GIANTS = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "AMD", "TSM", "AVGO", "NFLX"]
 GROWTH_STARS = ["COHR", "PLTR", "SMCI", "ARM", "SOFI", "UBER", "CRWD", "NOW", "SHOP", "SQ", "SPOT"]
-HK_STOCKS = ["0700.HK", "0388.HK", "3690.HK", "1299.HK", "0005.HK", "0941.HK", "1810.HK"]
 
 # --- 自動抓取標普 500 最新成份股 ---
 @st.cache_data(ttl=86400)
@@ -66,42 +65,45 @@ def run_screener_logic(df):
 # 模式一：🔍 全自動選股掃描器 (Screener)
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
-    st.subheader("🚀 批量趨勢篩選雷達 (免打字模式)")
-    st.write("直接選擇內建的板塊名單，系統會全自動連線抓取並篩選出符合 Mark Minervini 第二階段的強勢股。")
+    st.subheader("🚀 美股趨勢篩選雷達 (自動載入模式)")
+    st.write("直接選擇掃描範圍，系統會連線抓取歷史數據並光速計算 Mark Minervini 的 7 大超級績效指標。")
     
-    # 免打字選單設計
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
         pool_choice = st.radio(
-            "選擇要自動掃描的股票池：",
+            "選擇要自動掃描的美股板塊：",
             [
                 "🌟 美股熱門科技巨頭 (11檔)",
                 "🔥 高動能高成長股 (11檔)",
-                "🇭🇰 港股核心藍籌股精選 (7檔)",
-                "🇺🇸 標普 500 前 50 檔權值股 (自動載入)",
-                "🇺🇸 標普 500 前 100 檔權值股 (自動載入)",
-                "✍️ 自訂代號 (手動模式)"
+                "🇺🇸 標普 500 前 50 檔權值股",
+                "🇺🇸 標普 500 前 100 檔權值股",
+                "🇺🇸 標普 500 全部成份股 (約500檔，需時較長)",
+                "✍️ 自訂代號 (手動輸入)"
             ]
         )
     with col_sel2:
         target_score = st.slider("過濾標準：顯示得分不低於", 4, 7, 6)
 
     # 決定掃描名單
+    sp500_all = fetch_sp500_tickers()
     if pool_choice == "🌟 美股熱門科技巨頭 (11檔)":
         scan_list = TECH_GIANTS
     elif pool_choice == "🔥 高動能高成長股 (11檔)":
         scan_list = GROWTH_STARS
-    elif pool_choice == "🇭🇰 港股核心藍籌股精選 (7檔)":
-        scan_list = HK_STOCKS
-    elif "標普 500 前 50 檔" in pool_choice:
-        scan_list = fetch_sp500_tickers()[:50]
-    elif "標普 500 前 100 檔" in pool_choice:
-        scan_list = fetch_sp500_tickers()[:100]
+    elif pool_choice == "🇺🇸 標普 500 前 50 檔權值股":
+        scan_list = sp500_all[:50]
+    elif pool_choice == "🇺🇸 標普 500 前 100 檔權值股":
+        scan_list = sp500_all[:100]
+    elif pool_choice == "🇺🇸 標普 500 全部成份股 (約500檔，需時較長)":
+        scan_list = sp500_all
     else:
-        custom_str = st.text_area("請輸入自訂代號 (以逗號隔開)", "COHR, NVDA, TSLA")
+        custom_str = st.text_area("請輸入美股代號 (以逗號隔開)", "COHR, NVDA, TSLA, GOOG, SOFI")
         scan_list = [t.strip().upper() for t in custom_str.split(",") if t.strip()]
 
     if st.button("🏁 啟動全自動掃描", type="primary"):
+        if len(scan_list) > 200:
+            st.info("⏳ 提示：掃描整份標普 500 清單預計需要數分鐘，請不要重新整理網頁，靜待進度條跑完...")
+            
         results = []
         progress = st.progress(0)
         status = st.empty()
@@ -135,11 +137,11 @@ else:
     st.sidebar.header("標的選擇")
     input_type = st.sidebar.radio("選擇方式", ["下拉快速切換", "手動輸入代號"])
     
-    combined_list = TECH_GIANTS + GROWTH_STARS + HK_STOCKS
+    combined_list = TECH_GIANTS + GROWTH_STARS
     if input_type == "下拉快速切換":
         ticker = st.sidebar.selectbox("選取股票", combined_list)
     else:
-        ticker = st.sidebar.text_input("輸入代號 (港股加.HK)", value="COHR").upper()
+        ticker = st.sidebar.text_input("輸入美股代號", value="COHR").upper()
     
     df_daily = load_stock_data(ticker)
     if not df_daily.empty:
