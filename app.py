@@ -6,49 +6,65 @@ import pandas as pd
 import numpy as np
 
 # ==========================================
-# 1. 系統設定
+# 1. 系統設定與初始化
 # ==========================================
 APP_NAME = "鷹眼 (EagleEye) 智能趨勢選股系統"
-VERSION = "V21"
+VERSION = "V22"
 
 st.set_page_config(page_title=f"{APP_NAME} {VERSION}", layout="wide")
 st.title(f"🦅 {APP_NAME} {VERSION}")
 
-# 初始化 Session State，用於跨頁面傳遞掃描結果
-if 'scan_results' not in st.session_state:
-    st.session_state.scan_results = []
+# 初始化 Session State (確保資料不會因切換頁面而消失)
+if 'full_results_df' not in st.session_state:
+    st.session_state.full_results_df = None
+if 'ticker_list' not in st.session_state:
+    st.session_state.ticker_list = []
 
 # --- 側邊欄控制中心 ---
 st.sidebar.header("🕹️ 系統控制中心")
 page_mode = st.sidebar.radio("切換功能模式", ["🔍 全自動選股掃描器 (Screener)", "📊 個股深度分析 (Chart)"])
 
-if st.sidebar.button("♻️ 強制清空緩存並重整"):
+if st.sidebar.button("♻️ 強制清空緩存與結果"):
     st.cache_data.clear()
-    st.session_state.scan_results = []
+    st.session_state.full_results_df = None
+    st.session_state.ticker_list = []
     st.rerun()
 
-# --- 核心引擎 ---
+# ==========================================
+# 2. 核心數據引擎
+# ==========================================
+
 @st.cache_data(ttl=86400)
 def fetch_sp500_tickers():
     try:
-        csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
-        df = pd.read_csv(csv_url)
+        url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
+        df = pd.read_csv(url)
         return [str(t).replace('.', '-') for t in df['Symbol'].tolist()]
     except:
         return ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "COHR", "PLTR"]
 
 @st.cache_data(ttl=3600)
-def get_stock_data_v21(ticker):
+def get_spy_performance():
+    """抓取大盤基準：半年(126天)報酬率"""
+    spy = yf.Ticker("SPY").history(period="1y")
+    if not spy.empty and len(spy) > 126:
+        return (spy['Close'].iloc[-1] / spy['Close'].iloc[-126]) - 1
+    return 0.05
+
+SPY_BENCHMARK = get_spy_performance()
+
+@st.cache_data(ttl=3600)
+def get_stock_data_v22(ticker):
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period="2y", interval="1d")
-        if df.empty or len(df) < 200: return pd.DataFrame(), {}
+        if df.empty or len(df) < 200: return None, None
         
         info = {}
         try: info = stock.info
         except: pass
         
-        # 指標計算
+        # 計算指標
         df['50MA'] = df['Close'].rolling(50).mean()
         df['150MA'] = df['Close'].rolling(150).mean()
         df['200MA'] = df['Close'].rolling(200).mean()
@@ -58,93 +74,103 @@ def get_stock_data_v21(ticker):
         eps_g = info.get('earningsQuarterlyGrowth') or info.get('quarterlyEarningsGrowth')
         rev_g = info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth')
         
-        return df, {
-            "eps": eps_g * 100 if eps_g else 0,
-            "rev": rev_g * 100 if rev_g else 0
-        }
-    except: return pd.DataFrame(), {}
+        fund = {"eps": eps_g * 100 if eps_g else 0, "rev": rev_g * 100 if rev_g else 0}
+        return df, fund
+    except: return None, None
 
-def evaluate_v21(df, fund):
+def evaluate_v22(df, fund):
     cur = float(df['Close'].iloc[-1])
     last = df.iloc[-1]
     h52, l52 = float(df.tail(252)['High'].max()), float(df.tail(252)['Low'].min())
     
-    c1 = cur > last['150MA'] and cur > last['200MA']
-    c2 = last['150MA'] > last['200MA']
-    c3 = last['200MA'] > last['MA200_Past'] if pd.notna(last['MA200_Past']) else False
-    c4 = last['50MA'] > last['150MA'] and last['50MA'] > last['200MA']
-    c5 = cur > last['50MA']
-    c6 = cur > l52 * 1.3
-    c7 = cur > h52 * 0.75
-    score = sum([c1, c2, c3, c4, c5, c6, c7])
+    # 7大準則
+    conds = [
+        cur > last['150MA'] and cur > last['200MA'],
+        last['150MA'] > last['200MA'],
+        last['200MA'] > last['MA200_Past'] if pd.notna(last['MA200_Past']) else False,
+        last['50MA'] > last['150MA'] and last['50MA'] > last['200MA'],
+        cur > last['50MA'],
+        cur > l52 * 1.3,
+        cur > h52 * 0.75
+    ]
     
-    return score, (score == 7), {"price": cur, "eps": fund.get('eps', 0), "rev": fund.get('rev', 0)}
+    # RS 強度計算 (相對於 SPY 的超額報酬率)
+    ret_6m = (cur / df['Close'].iloc[-126]) - 1 if len(df) > 126 else 0
+    rs_intensity = (ret_6m - SPY_BENCHMARK) * 100
+    
+    return sum(conds), {"price": cur, "rs_idx": rs_intensity, "eps": fund['eps'], "rev": fund['rev']}
 
 # ==========================================
-# 3. 掃描器模式 (Screener)
+# 3. 模式一：🔍 全自動選股掃描器 (Screener)
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
     st.subheader("🚀 鷹眼全市場掃描雷達")
     
     col_a, col_b = st.columns(2)
     with col_a:
-        pool = st.radio("範圍：", ["🔥 熱門精選", "🇺🇸 標普 500 全部", "✍️ 自訂輸入"])
+        pool = st.radio("範圍：", ["🔥 熱門精選", "🇺🇸 標普 500 全部"], index=1)
     with col_b:
-        min_s = st.slider("最低門檻：", 4, 7, 7)
-        f_growth = st.checkbox("📈 僅顯示財報正成長", value=False)
+        min_s = st.slider("門檻分數：", 4, 7, 7)
+        filter_rs = st.checkbox("👑 僅顯示跑贏大盤 (RS > 0)", value=True)
 
-    if st.button("🏁 啟動全方位掃描", type="primary"):
-        tickers = fetch_sp500_tickers() if "標普" in pool else ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "COHR", "PLTR"]
+    if st.button("🏁 開始深度掃描", type="primary"):
+        tickers = fetch_sp500_tickers() if "標普" in pool else ["NVDA", "AAPL", "MSFT", "COHR", "PLTR", "TSM"]
         
-        results = []
+        temp_results = []
         bar = st.progress(0)
         status = st.empty()
 
         for i, t in enumerate(tickers):
-            status.text(f"掃描中 ({i+1}/{len(tickers)}): {t}")
-            df, fund = get_stock_data_v21(t)
-            if not df.empty:
-                score, is_pass, m = evaluate_v21(df, fund)
-                growth_ok = (m['eps'] > 0 or m['rev'] > 0) if f_growth else True
+            status.text(f"分析中 ({i+1}/{len(tickers)}): {t}")
+            df, fund = get_stock_data_v22(t)
+            if df is not None:
+                score, m = evaluate_v22(df, fund)
+                rs_ok = m['rs_idx'] > 0 if filter_rs else True
                 
-                if score >= min_s and growth_ok:
-                    results.append({
-                        "代號": t, "得分": score, "狀態": "🔥 符合" if is_pass else "蓄勢",
-                        "價格": m['price'], "EPS成長(%)": round(m['eps'], 1), "營收成長(%)": round(m['rev'], 1)
+                if score >= min_s and rs_ok:
+                    temp_results.append({
+                        "代號": t, "得分": score, 
+                        "RS 強度": round(m['rs_idx'], 1),
+                        "價格": round(m['price'], 2), 
+                        "EPS 成長(%)": round(m['eps'], 1), 
+                        "營收 成長(%)": round(m['rev'], 1)
                     })
             bar.progress((i + 1) / len(tickers))
         
-        st.session_state.scan_results = [r['代號'] for r in results]
-        status.success(f"完成！找到 {len(results)} 檔個股。提示：可點擊下方表頭進行排序。")
-        
-        if results:
-            # 使用 st.dataframe 替代 st.table，支援點擊表頭排序
-            st.dataframe(
-                pd.DataFrame(results).sort_values(by="EPS成長(%)", ascending=False),
-                use_container_width=True,
-                hide_index=True
-            )
-            st.info("💡 掃描完畢！現在可切換到『個股深度分析』，從下拉選單直接查看上述標的圖表。")
+        # 儲存結果到 Session State
+        st.session_state.full_results_df = pd.DataFrame(temp_results)
+        st.session_state.ticker_list = [r['代號'] for r in temp_results]
+        status.success(f"掃描完成！共發現 {len(temp_results)} 檔符合標的。")
+
+    # 持久化顯示表格 (只要有資料就顯示，不受切換頁面影響)
+    if st.session_state.full_results_df is not None:
+        st.write("---")
+        st.write("### 📊 掃描結果表 (點擊表頭可排序)")
+        st.dataframe(
+            st.session_state.full_results_df.sort_values(by="RS 強度", ascending=False),
+            use_container_width=True,
+            hide_index=True
+        )
 
 # ==========================================
-# 4. 圖表模式 (Chart)
+# 4. 模式二：📊 個股深度分析 (Chart)
 # ==========================================
 else:
     st.sidebar.markdown("---")
-    if st.session_state.scan_results:
-        # 連動功能：直接從掃描結果中選取
-        ticker = st.sidebar.selectbox("🎯 快速查看掃描結果", st.session_state.scan_results)
+    # 如果掃描器有結果，選單會自動更新
+    if st.session_state.ticker_list:
+        ticker = st.sidebar.selectbox("🎯 從掃描結果中選擇標的", st.session_state.ticker_list)
     else:
         ticker = st.sidebar.text_input("🎯 手動輸入代號", value="NVDA").upper()
     
-    df, fund = get_stock_data_v21(ticker)
-    if not df.empty:
-        score, is_pass, m = evaluate_v21(df, fund)
+    df, fund = get_stock_data_v22(ticker)
+    if df is not None:
+        score, m = evaluate_v22(df, fund)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("價格", f"${m['price']:.2f}")
-        c2.metric("得分", f"{score}/7")
-        c3.metric("EPS成長", f"{m['eps']:.1f}%")
-        c4.metric("營收成長", f"{m['rev']:.1f}%")
+        c2.metric("RS 強度 (vs 大盤)", f"{m['rs_idx']:.1f}%")
+        c3.metric("EPS 成長", f"{m['eps']:.1f}%")
+        c4.metric("得分", f"{score}/7")
         
         st.markdown("---")
         tabs = st.tabs(["日K", "周K", "月K"])
@@ -161,4 +187,15 @@ else:
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified")
             return fig
         with tabs[0]: st.plotly_chart(draw(df), use_container_width=True)
-        # (周K與月K邏輯同前，為簡潔省略)
+        with tabs[1]:
+            w = yf.Ticker(ticker).history(period="5y", interval="1wk")
+            if not w.empty:
+                for ma in [50, 150, 200]: w[f'{ma}MA'] = w['Close'].rolling(ma).mean()
+                w['Vol_50MA'] = w['Volume'].rolling(50).mean()
+                st.plotly_chart(draw(w), use_container_width=True)
+        with tabs[2]:
+            m_data = yf.Ticker(ticker).history(period="max", interval="1mo")
+            if not m_data.empty:
+                for ma in [50, 150, 200]: m_data[f'{ma}MA'] = m_data['Close'].rolling(ma).mean()
+                m_data['Vol_50MA'] = m_data['Volume'].rolling(50).mean()
+                st.plotly_chart(draw(m_data), use_container_width=True)
