@@ -3,7 +3,6 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-import requests
 
 # 頁面基礎設定
 st.set_page_config(page_title="Minervini 美股全自動掃描系統", layout="wide")
@@ -17,20 +16,24 @@ page_mode = st.sidebar.radio("切換功能模式", ["🔍 全自動選股掃描�
 TECH_GIANTS = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "AMD", "TSM", "AVGO", "NFLX"]
 GROWTH_STARS = ["COHR", "PLTR", "SMCI", "ARM", "SOFI", "UBER", "CRWD", "NOW", "SHOP", "SQ", "SPOT"]
 
-# --- 突破阻擋：自動抓取標普 500 真實最新成份股 ---
+# --- 終極穩定方案：讀取純 CSV 格式的標普 500 清單 ---
 @st.cache_data(ttl=86400)
 def fetch_sp500_tickers():
     try:
-        # 加上 User-Agent 偽裝成正常瀏覽器，避免被維基百科伺服器拒絕連線
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=headers, timeout=15)
-        table = pd.read_html(response.text)
-        tickers = table[0]['Symbol'].tolist()
-        # 將維基百科中的 BRK.B 轉換為 yfinance 認得的 BRK-B 格式
-        return [t.replace('.', '-') for t in tickers]
-    except Exception as e:
-        st.sidebar.error("無法連線至維基百科抓取名單，已自動切換至備用精選池。")
-        return TECH_GIANTS + GROWTH_STARS
+        # 方案 A：直接從高穩定性的 GitHub 數據集 CDN 讀取純 CSV 檔案 (絕對不被阻擋，速度極快)
+        csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
+        df = pd.read_csv(csv_url)
+        tickers = df['Symbol'].tolist()
+        return [str(t).replace('.', '-') for t in tickers]
+    except Exception:
+        try:
+            # 方案 B：如果 CDN 異常，讀取 Wikipedia 的備用表格
+            tables = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
+            tickers = tables[0]['Symbol'].tolist()
+            return [str(t).replace('.', '-') for t in tickers]
+        except Exception:
+            st.sidebar.error("連線外部資料庫受限，已切換至高流動性精選池。")
+            return TECH_GIANTS + GROWTH_STARS
 
 # --- 核心引擎：資料抓取與處理 ---
 @st.cache_data(ttl=3600)
@@ -91,7 +94,6 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
         target_score = st.slider("過濾標準：顯示得分不低於", 4, 7, 6)
 
     if st.button("🏁 啟動全自動掃描", type="primary"):
-        # 點擊按鈕後才正式下載名單，確保流暢度
         sp500_all = fetch_sp500_tickers()
         
         if pool_choice == "🌟 美股熱門科技巨頭 (11檔)": scan_list = TECH_GIANTS
