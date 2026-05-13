@@ -3,6 +3,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import requests
 
 # 頁面基礎設定
 st.set_page_config(page_title="Minervini 美股全自動掃描系統", layout="wide")
@@ -16,14 +17,19 @@ page_mode = st.sidebar.radio("切換功能模式", ["🔍 全自動選股掃描�
 TECH_GIANTS = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "AMD", "TSM", "AVGO", "NFLX"]
 GROWTH_STARS = ["COHR", "PLTR", "SMCI", "ARM", "SOFI", "UBER", "CRWD", "NOW", "SHOP", "SQ", "SPOT"]
 
-# --- 自動抓取標普 500 最新成份股 ---
+# --- 突破阻擋：自動抓取標普 500 真實最新成份股 ---
 @st.cache_data(ttl=86400)
 def fetch_sp500_tickers():
     try:
-        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        table = pd.read_html(url)
-        return table[0]['Symbol'].tolist()
-    except:
+        # 加上 User-Agent 偽裝成正常瀏覽器，避免被維基百科伺服器拒絕連線
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=headers, timeout=15)
+        table = pd.read_html(response.text)
+        tickers = table[0]['Symbol'].tolist()
+        # 將維基百科中的 BRK.B 轉換為 yfinance 認得的 BRK-B 格式
+        return [t.replace('.', '-') for t in tickers]
+    except Exception as e:
+        st.sidebar.error("無法連線至維基百科抓取名單，已自動切換至備用精選池。")
         return TECH_GIANTS + GROWTH_STARS
 
 # --- 核心引擎：資料抓取與處理 ---
@@ -65,7 +71,7 @@ def run_screener_logic(df):
 # 模式一：🔍 全自動選股掃描器 (Screener)
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
-    st.subheader("🚀 美股趨勢篩選雷達 (自動載入模式)")
+    st.subheader("🚀 美股趨勢篩選雷達 (全市場真實掃描)")
     st.write("直接選擇掃描範圍，系統會連線抓取歷史數據並光速計算 Mark Minervini 的 7 大超級績效指標。")
     
     col_sel1, col_sel2 = st.columns(2)
@@ -77,39 +83,35 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                 "🔥 高動能高成長股 (11檔)",
                 "🇺🇸 標普 500 前 50 檔權值股",
                 "🇺🇸 標普 500 前 100 檔權值股",
-                "🇺🇸 標普 500 全部成份股 (約500檔，需時較長)",
+                "🇺🇸 標普 500 全部成份股 (約503檔，需時約3-5分鐘)",
                 "✍️ 自訂代號 (手動輸入)"
             ]
         )
     with col_sel2:
         target_score = st.slider("過濾標準：顯示得分不低於", 4, 7, 6)
 
-    # 決定掃描名單
-    sp500_all = fetch_sp500_tickers()
-    if pool_choice == "🌟 美股熱門科技巨頭 (11檔)":
-        scan_list = TECH_GIANTS
-    elif pool_choice == "🔥 高動能高成長股 (11檔)":
-        scan_list = GROWTH_STARS
-    elif pool_choice == "🇺🇸 標普 500 前 50 檔權值股":
-        scan_list = sp500_all[:50]
-    elif pool_choice == "🇺🇸 標普 500 前 100 檔權值股":
-        scan_list = sp500_all[:100]
-    elif pool_choice == "🇺🇸 標普 500 全部成份股 (約500檔，需時較長)":
-        scan_list = sp500_all
-    else:
-        custom_str = st.text_area("請輸入美股代號 (以逗號隔開)", "COHR, NVDA, TSLA, GOOG, SOFI")
-        scan_list = [t.strip().upper() for t in custom_str.split(",") if t.strip()]
-
     if st.button("🏁 啟動全自動掃描", type="primary"):
+        # 點擊按鈕後才正式下載名單，確保流暢度
+        sp500_all = fetch_sp500_tickers()
+        
+        if pool_choice == "🌟 美股熱門科技巨頭 (11檔)": scan_list = TECH_GIANTS
+        elif pool_choice == "🔥 高動能高成長股 (11檔)": scan_list = GROWTH_STARS
+        elif pool_choice == "🇺🇸 標普 500 前 50 檔權值股": scan_list = sp500_all[:50]
+        elif pool_choice == "🇺🇸 標普 500 前 100 檔權值股": scan_list = sp500_all[:100]
+        elif "全部成份股" in pool_choice: scan_list = sp500_all
+        else:
+            custom_str = st.text_area("請輸入美股代號 (以逗號隔開)", "COHR, NVDA, TSLA")
+            scan_list = [t.strip().upper() for t in custom_str.split(",") if t.strip()]
+
         if len(scan_list) > 200:
-            st.info("⏳ 提示：掃描整份標普 500 清單預計需要數分鐘，請不要重新整理網頁，靜待進度條跑完...")
+            st.warning("⚠️ **深度掃描啟動中**：系統正在逐一連線取得超過 500 檔個股的兩年數據。預計耗時 **3 至 5 分鐘**，請喝杯咖啡靜待下方進度條完成，切勿關閉或重整網頁！")
             
         results = []
         progress = st.progress(0)
         status = st.empty()
         
         for i, t in enumerate(scan_list):
-            status.text(f"正在連線分析 ({i+1}/{len(scan_list)}): {t} ...")
+            status.text(f"正在下載並運算 ({i+1}/{len(scan_list)}): {t} ...")
             df = load_stock_data(t)
             if not df.empty:
                 score, is_pass, m = run_screener_logic(df)
@@ -123,7 +125,7 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                     })
             progress.progress((i + 1) / len(scan_list))
         
-        status.success(f"掃描完成！在指定的 {len(scan_list)} 檔股票中挑選出 {len(results)} 檔達標強勢股。")
+        status.success(f"掃描徹底完成！在真實抓取的 {len(scan_list)} 檔股票中挑選出 {len(results)} 檔達標強勢股。")
         if results:
             st.table(pd.DataFrame(results))
         else:
@@ -147,14 +149,12 @@ else:
     if not df_daily.empty:
         score, is_pass, m = run_screener_logic(df_daily)
         
-        # 頂部數據
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("價格", f"${m['price']:.2f}")
         col2.metric("52週最高", f"${m['hi52']:.2f}")
         col3.metric("52週最低", f"${m['lo52']:.2f}")
         col4.metric("指標得分", f"{score} / 7")
         
-        # 常駐健檢清單
         st.markdown("---")
         st.subheader("📋 Stage 2 趨勢健檢詳細清單")
         c_list, c_msg = st.columns([2, 1])
@@ -172,7 +172,6 @@ else:
             else: st.warning(f"目前符合 {score} 項條件。")
         st.markdown("---")
         
-        # 專業看盤區
         tabs = st.tabs(["日K", "周K", "月K"])
         def draw_chart(data):
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_width=[0.25, 0.75])
