@@ -4,13 +4,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
-st.set_page_config(page_title="專屬看盤系統 (富途牛牛旗艦版)", layout="wide")
-st.title("🦅 專屬專業看盤系統：富途牛牛旗艦版")
+st.set_page_config(page_title="專屬看盤系統 (Stage 2 常駐版)", layout="wide")
+st.title("🦅 專屬專業看盤系統：第二階段趨勢旗艦版")
 
 # --- 側邊欄：智能選股模組 ---
 st.sidebar.header("設定標的")
 
-# 預設的高品質觀察清單
+# 預設觀察清單
 default_watchlist = [
     "COHR", "NVDA", "GOOG", "SOFI", "O", 
     "TSLA", "AAPL", "MSFT", "AMZN", "META", 
@@ -18,7 +18,6 @@ default_watchlist = [
     "SPY", "QQQ", "0700.HK", "0388.HK"
 ]
 
-# 讓使用者選擇輸入模式
 input_mode = st.sidebar.radio("選擇切換方式", ["📋 自選股快速選單", "✍️ 手動輸入其他代號"])
 
 if input_mode == "📋 自選股快速選單":
@@ -93,19 +92,24 @@ if not daily_data.empty:
     col3.metric("52週最低", f"${lo52:.2f}")
     col4.metric("趨勢指標得分", f"{pass_count} / 7")
 
-    with st.expander("📊 點此展開 Minervini 趨勢模板詳細健檢狀態", expanded=False):
-        col_list, col_res = st.columns([2, 1])
-        with col_list:
-            for c in criteria:
-                icon = "✅" if c['status'] else "❌"
-                st.write(f"{icon} {c['desc']}")
-        with col_res:
-            if pass_count == 7:
-                st.success(f"🔥 **{ticker_symbol} 完全符合 Stage 2 超級績效趨勢模板！**")
-            elif pass_count >= 5:
-                st.info(f"蓄勢待發：已滿足 {pass_count} 項條件。")
-            else:
-                st.warning(f"目前結構偏弱或處於調整，僅符合 {pass_count} 項條件。")
+    # --- 解除隱藏！將 Stage 2 健檢清單直接常駐顯示 ---
+    st.markdown("---")
+    st.subheader("📋 第二階段 (Stage 2) 趨勢模板健檢清單")
+    
+    col_list, col_res = st.columns([2, 1])
+    with col_list:
+        for c in criteria:
+            icon = "✅" if c['status'] else "❌"
+            st.write(f"{icon} {c['desc']}")
+            
+    with col_res:
+        if pass_count == 7:
+            st.success(f"🔥 **{ticker_symbol} 完全符合 Stage 2 超級績效趨勢模板！**")
+        elif pass_count >= 5:
+            st.info(f"蓄勢待發：已滿足 {pass_count} 項條件，隨時留意突破訊號。")
+        else:
+            st.warning(f"目前結構偏弱或處於調整期，僅符合 {pass_count} 項條件。")
+    st.markdown("---")
 
     # --- 繪圖區 ---
     st.subheader("📡 專業看盤主控台")
