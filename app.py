@@ -10,7 +10,7 @@ import requests
 # 1. 系統核心設定
 # ==========================================
 APP_NAME = "超級績效 智能趨勢選股系統"
-VERSION = "V25"
+VERSION = "V26"
 
 st.set_page_config(page_title=f"{APP_NAME} {VERSION}", layout="wide")
 st.title(f"📈 {APP_NAME} {VERSION}")
@@ -32,21 +32,29 @@ if st.sidebar.button("♻️ 強制清空緩存並重整"):
     st.rerun()
 
 # ==========================================
-# 2. 數據抓取引擎 (含強化備援)
+# 2. 數據抓取引擎
 # ==========================================
 
 @st.cache_data(ttl=86400)
-def fetch_sector_data():
+def fetch_full_sp500_data():
+    """抓取標普500名單，並確保 11 大板塊完整性"""
+    fallback_sectors = [
+        "Information Technology", "Health Care", "Financials", "Consumer Discretionary", 
+        "Communication Services", "Industrials", "Consumer Staples", "Energy", 
+        "Utilities", "Real Estate", "Materials"
+    ]
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         res = requests.get(url, headers=headers, timeout=10)
         df = pd.read_html(res.text)[0]
         df['Symbol'] = df['Symbol'].str.replace('.', '-', regex=False)
-        return df[['Symbol', 'GICS Sector']]
+        return df[['Symbol', 'GICS Sector']], sorted(df['GICS Sector'].unique().tolist())
     except:
-        # 基本備援
-        return pd.DataFrame([{"Symbol": "AAPL", "GICS Sector": "Information Technology"}])
+        # 若連線失敗，返回基本清單與硬編碼的 11 大板塊名單
+        st.sidebar.warning("⚠️ 維基百科連線受限，已加載預設板塊清單。")
+        dummy_df = pd.DataFrame([{"Symbol": "AAPL", "GICS Sector": "Information Technology"}])
+        return dummy_df, fallback_sectors
 
 @st.cache_data(ttl=3600)
 def get_spy_bench():
@@ -64,12 +72,14 @@ def get_sepa_data(ticker):
         df = s.history(period="2y", interval="1d")
         if df.empty or len(df) < 200: return None, None
         
+        # 技術指標
         df['50MA'] = df['Close'].rolling(50).mean()
         df['150MA'] = df['Close'].rolling(150).mean()
         df['200MA'] = df['Close'].rolling(200).mean()
         df['MA200_Past'] = df['200MA'].shift(20)
         df['Vol_50MA'] = df['Volume'].rolling(50).mean()
         
+        # 財報提取
         info = s.info
         fund = {
             "eps": (info.get('earningsQuarterlyGrowth') or info.get('quarterlyEarningsGrowth') or 0) * 100,
@@ -79,83 +89,84 @@ def get_sepa_data(ticker):
     except: return None, None
 
 # ==========================================
-# 3. 掃描器頁面 (修正 KeyError 邏輯)
+# 3. 掃描器頁面
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
-    st.subheader("🚀 批量趨勢篩選雷達 (排序功能強化版)")
+    st.subheader("🚀 批量趨勢篩選雷達 (11大板塊解鎖版)")
     
-    sp_data = fetch_sector_data()
-    all_sectors = sorted(sp_data['GICS Sector'].unique().tolist())
+    # 獲取板塊數據與名單
+    sp_data, all_sectors = fetch_full_sp500_data()
 
     c1, c2 = st.columns(2)
     with c1:
-        mode = st.radio("掃描範圍：", ["🔥 熱門精選", "🇺🇸 標普 500 全掃", "📂 標普 500 分板塊"])
-        target_sector = st.selectbox("選擇板塊：", all_sectors) if "分板塊" in mode else None
+        mode = st.radio("掃描範圍：", ["🔥 熱門精選 (22檔)", "🇺🇸 標普 500 全掃", "📂 標普 500 分板塊"])
+        target_sector = st.selectbox("選擇要掃描的板塊：", all_sectors) if "分板塊" in mode else None
     with c2:
-        sort_by = st.selectbox("優先排序依據：", ["綜合潛力", "EPS成長", "營收成長", "RS強度"])
+        sort_key = st.selectbox("結果排序依據：", ["綜合潛力", "RS強度", "EPS成長", "營收成長"])
         min_s = st.slider("Minervini 分數門檻：", 4, 7, 7)
         only_rs = st.checkbox("👑 跑贏大盤 (RS > 0)", value=True)
 
-    if st.button("🏁 開始超級績效掃描", type="primary"):
-        if mode == "🔥 熱門精選":
-            tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "COHR", "PLTR", "ARM", "AVGO"]
+    if st.button("🏁 開始超級績效深度掃描", type="primary"):
+        if mode == "🔥 熱門精選 (22檔)":
+            tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "COHR", "PLTR", "ARM", "AVGO", "NFLX", "SMCI", "UBER", "CRWD", "NOW", "SHOP", "SQ", "SPOT", "AMD", "TSM", "SOFI"]
         elif mode == "🇺🇸 標普 500 全掃":
-            tickers = sp_data['Symbol'].tolist()
+            tickers = sp_data['Symbol'].tolist() if not sp_data.empty else []
         else:
-            tickers = sp_data[sp_data['GICS Sector'] == target_sector]['Symbol'].tolist()
+            # 針對特定板塊過濾
+            tickers = sp_data[sp_data['GICS Sector'] == target_sector]['Symbol'].tolist() if not sp_data.empty else []
 
-        results = []
-        bar = st.progress(0)
-        status = st.empty()
-
-        for i, t in enumerate(tickers):
-            status.text(f"分析中 ({i+1}/{len(tickers)}): {t}")
-            df, fund = get_sepa_data(t)
-            if df is not None:
-                cur = float(df['Close'].iloc[-1])
-                last = df.iloc[-1]
-                h52, l52 = float(df.tail(252)['High'].max()), float(df.tail(252)['Low'].min())
-                
-                conds = [
-                    cur > last['150MA'] and cur > last['200MA'], last['150MA'] > last['200MA'],
-                    last['200MA'] > last['MA200_Past'] if pd.notna(last['MA200_Past']) else False,
-                    last['50MA'] > last['150MA'] and last['50MA'] > last['200MA'],
-                    cur > last['50MA'], cur > l52 * 1.3, cur > h52 * 0.75
-                ]
-                score = sum(conds)
-                rs_val = ((cur / df['Close'].iloc[-126]) - 1 - SPY_6M) * 100 if len(df) > 126 else 0
-                
-                if score >= min_s and (rs_val > 0 if only_rs else True):
-                    # 潛力分公式優化
-                    potential = (score/7 * 40) + (min(max(rs_val, 0), 100)/100 * 40) + (min(max(fund['eps'], 0), 100)/100 * 20)
-                    results.append({
-                        "代號": t, "得分": score, "RS強度": round(rs_val, 1),
-                        "綜合潛力": round(potential, 1), "價格": round(cur, 2),
-                        "EPS成長": round(fund['eps'], 1), "營收成長": round(fund['rev'], 1)
-                    })
-            bar.progress((i + 1) / len(tickers))
-        
-        # 關鍵修復：檢查 results 是否為空，避免 KeyError
-        if results:
-            st.session_state.scan_df = pd.DataFrame(results).sort_values(by=sort_by, ascending=False)
-            st.session_state.active_tickers = st.session_state.scan_df['代號'].tolist()
-            status.success(f"掃描完成！找到 {len(results)} 檔優質標的，已按『{sort_by}』排序。")
+        if not tickers:
+            st.error("❌ 無法取得該範圍的名單，請確認網路連線或嘗試『熱門精選』。")
         else:
-            st.session_state.scan_df = None
-            st.session_state.active_tickers = []
-            status.warning("當前設定範圍內，查無任何符合條件的標的。")
+            results = []
+            bar = st.progress(0)
+            status = st.empty()
+
+            for i, t in enumerate(tickers):
+                status.text(f"分析中 ({i+1}/{len(tickers)}): {t}")
+                df, fund = get_sepa_data(t)
+                if df is not None:
+                    cur = float(df['Close'].iloc[-1])
+                    last = df.iloc[-1]
+                    h52, l52 = float(df.tail(252)['High'].max()), float(df.tail(252)['Low'].min())
+                    
+                    conds = [
+                        cur > last['150MA'] and cur > last['200MA'], last['150MA'] > last['200MA'],
+                        last['200MA'] > last['MA200_Past'] if pd.notna(last['MA200_Past']) else False,
+                        last['50MA'] > last['150MA'] and last['50MA'] > last['200MA'],
+                        cur > last['50MA'], cur > l52 * 1.3, cur > h52 * 0.75
+                    ]
+                    score = sum(conds)
+                    rs_val = ((cur / df['Close'].iloc[-126]) - 1 - SPY_6M) * 100 if len(df) > 126 else 0
+                    
+                    if score >= min_s and (rs_val > 0 if only_rs else True):
+                        potential = (score/7 * 40) + (min(max(rs_val, 0), 100)/100 * 40) + (min(max(fund['eps'], 0), 100)/100 * 20)
+                        results.append({
+                            "代號": t, "得分": score, "RS強度": round(rs_val, 1),
+                            "綜合潛力": round(potential, 1), "價格": round(cur, 2),
+                            "EPS成長": round(fund['eps'], 1), "營收成長": round(fund['rev'], 1)
+                        })
+                bar.progress((i + 1) / len(tickers))
+            
+            if results:
+                st.session_state.scan_df = pd.DataFrame(results).sort_values(by=sort_key, ascending=False)
+                st.session_state.active_tickers = st.session_state.scan_df['代號'].tolist()
+                status.success(f"掃描完成！發現 {len(results)} 檔優質標的。")
+            else:
+                st.session_state.scan_df = None
+                status.warning("當前範圍內無標的符合條件。")
 
     if st.session_state.scan_df is not None:
         st.write("---")
         st.dataframe(st.session_state.scan_df, use_container_width=True, hide_index=True)
 
 # ==========================================
-# 4. 個股圖表頁面
+# 4. 個股深度分析頁面
 # ==========================================
 else:
     st.sidebar.markdown("---")
     if st.session_state.active_tickers:
-        target = st.sidebar.selectbox("🎯 快速查看結果 (已同步掃描順序)", st.session_state.active_tickers)
+        target = st.sidebar.selectbox("🎯 快速查看結果", st.session_state.active_tickers)
     else:
         target = st.sidebar.text_input("🎯 手動輸入", value="NVDA").upper()
     
@@ -165,8 +176,8 @@ else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("價格", f"${df['Close'].iloc[-1]:.2f}")
         c2.metric("EPS 成長", f"{fund['eps']:.1f}%")
-        c3.metric("營收 成長", f"{fund['rev']:.1f}%")
-        c4.metric("RS 強度", f"{((df['Close'].iloc[-1]/df['Close'].iloc[-126])-1-SPY_6M)*100:.1f}%")
+        c3.metric("RS 強度", f"{((df['Close'].iloc[-1]/df['Close'].iloc[-126])-1-SPY_6M)*100:.1f}%")
+        c4.metric("營收 成長", f"{fund['rev']:.1f}%")
         
         tabs = st.tabs(["日K", "周K", "月K"])
         def plot_futu(data):
