@@ -71,7 +71,7 @@ def run_screener_logic(df):
 # 頁面一：🔍 全自動選股掃描器 (Screener)
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
-    st.subheader("🚀 鷹超級績效全市場掃描雷達")
+    st.subheader("🚀 超級績效全市場掃描雷達")
     st.write("自動鎖定美股全市場，捕捉處於第二階段 (Stage 2) 的超級成長股。")
     
     col_sel1, col_sel2 = st.columns(2)
