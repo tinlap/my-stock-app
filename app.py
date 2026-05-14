@@ -10,12 +10,11 @@ import requests
 # 1. 系統核心設定與專業化 UI 佈局
 # ==========================================
 APP_NAME = "超級績效 智能趨勢選股系統"
-VERSION = "V27"
+VERSION = "V28"
 
-# 設定全寬頁面與深色主題預設感知
 st.set_page_config(page_title=f"{APP_NAME} {VERSION}", layout="wide", initial_sidebar_state="expanded")
 
-# 隱藏預設頂部裝飾線與底部浮水印，提升終端終極專業感
+# 隱藏預設裝飾線，維持彭博終端極致質感
 hide_streamlit_style = """
 <style>
 #MainMenu {visibility: hidden;}
@@ -26,7 +25,7 @@ div.block-container {padding-top: 1.5rem;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-st.title(f"📈 {APP_NAME} {VERSION}")
+st.title(f"📈 {APP_NAME} {VERSION} (強固穩定版)")
 
 # 初始化持久化記憶
 if 'scan_df' not in st.session_state:
@@ -46,12 +45,11 @@ if st.sidebar.button("♻️ 強制清空緩存並重整", use_container_width=T
     st.rerun()
 
 # ==========================================
-# 2. 數據抓取引擎 (繼承 V26 完整設定)
+# 2. 數據抓取引擎 (導入 API 斷鏈免疫機制)
 # ==========================================
 
 @st.cache_data(ttl=86400)
 def fetch_full_sp500_data():
-    """抓取標普500名單，並確保 11 大板塊完整性"""
     fallback_sectors = [
         "Information Technology", "Health Care", "Financials", "Consumer Discretionary", 
         "Communication Services", "Industrials", "Consumer Staples", "Energy", 
@@ -85,31 +83,34 @@ def get_sepa_data(ticker):
         df = s.history(period="2y", interval="1d")
         if df.empty or len(df) < 200: return None, None
         
-        # 技術指標
+        # 技術指標計算 (核心過濾基礎)
         df['50MA'] = df['Close'].rolling(50).mean()
         df['150MA'] = df['Close'].rolling(150).mean()
         df['200MA'] = df['Close'].rolling(200).mean()
         df['MA200_Past'] = df['200MA'].shift(20)
         df['Vol_50MA'] = df['Volume'].rolling(50).mean()
         
-        # 財報提取
-        info = s.info
-        fund = {
-            "eps": (info.get('earningsQuarterlyGrowth') or info.get('quarterlyEarningsGrowth') or 0) * 100,
-            "rev": (info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth') or 0) * 100
-        }
+        # 獨立 Try-Except 斷開連鎖崩潰：即使 API 阻擋 info，仍保留 K 線成果
+        eps_val, rev_val = 0.0, 0.0
+        try:
+            info = s.info
+            eps_val = (info.get('earningsQuarterlyGrowth') or info.get('quarterlyEarningsGrowth') or 0) * 100
+            rev_val = (info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth') or 0) * 100
+        except:
+            pass # 靜默通過，依賴純量價趨勢過濾
+            
+        fund = {"eps": eps_val, "rev": rev_val}
         return df, fund
     except: return None, None
 
 # ==========================================
-# 3. 掃描器頁面 (新增獨立自訂輸入欄位)
+# 3. 掃描器頁面
 # ==========================================
 if page_mode == "🔍 全自動選股掃描器 (Screener)":
     st.subheader("🚀 批量趨勢篩選雷達")
     
     sp_data, all_sectors = fetch_full_sp500_data()
 
-    # 專業化表單佈局
     with st.container():
         c1, c2, c3 = st.columns([1.2, 1.5, 1.3])
         with c1:
@@ -117,16 +118,15 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                 "🔥 熱門精選 (22檔)", 
                 "🇺🇸 標普 500 全掃", 
                 "📂 標普 500 分板塊", 
-                "✍️ 自訂輸入清單"   # 新增的獨立選項
+                "✍️ 自訂輸入清單"
             ])
         with c2:
-            # 動態顯示對應的輸入或下拉區塊
             if mode == "📂 標普 500 分板塊":
                 target_sector = st.selectbox("🎯 選擇目標板塊：", all_sectors)
             elif mode == "✍️ 自訂輸入清單":
                 custom_input = st.text_area("⌨️ 輸入股票代號 (以逗號隔開)：", "LITE, COHR, NVDA, TSLA, APP", height=100)
             else:
-                st.info("💡 系統將自動載入內建大數據清單進行深度掃描。")
+                st.info("💡 系統將自動載入大數據清單進行量價與趨勢解析。")
                 
         with c3:
             sort_key = st.selectbox("📊 結果排序依據：", ["綜合潛力", "RS強度", "EPS成長", "營收成長"])
@@ -134,26 +134,25 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
             only_rs = st.checkbox("👑 嚴格過濾：僅顯示跑贏大盤 (RS > 0)", value=True)
 
     st.markdown("---")
-    if st.button("🏁 啟動量價與財報深度掃描", type="primary", use_container_width=True):
-        # 判斷掃描清單來源
+    if st.button("🏁 啟動量價與動能深度掃描", type="primary", use_container_width=True):
         if mode == "🔥 熱門精選 (22檔)":
             tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "COHR", "PLTR", "ARM", "AVGO", "NFLX", "SMCI", "UBER", "CRWD", "NOW", "SHOP", "SQ", "SPOT", "AMD", "TSM", "SOFI"]
         elif mode == "🇺🇸 標普 500 全掃":
             tickers = sp_data['Symbol'].tolist() if not sp_data.empty else []
         elif mode == "📂 標普 500 分板塊":
             tickers = sp_data[sp_data['GICS Sector'] == target_sector]['Symbol'].tolist() if not sp_data.empty else []
-        else: # 自訂輸入模式
+        else:
             tickers = [t.strip().upper() for t in custom_input.split(",") if t.strip()]
 
         if not tickers:
-            st.error("❌ 掃描清單為空，請確認輸入代號或網路狀態。")
+            st.error("❌ 掃描清單為空，請確認代號或網路狀態。")
         else:
             results = []
             bar = st.progress(0)
             status = st.empty()
 
             for i, t in enumerate(tickers):
-                status.text(f"⏳ 終端運算中 ({i+1}/{len(tickers)}): 正在解析 {t} 核心數據流...")
+                status.text(f"⏳ 終端運算中 ({i+1}/{len(tickers)}): 正在萃取 {t} 量價結構...")
                 df, fund = get_sepa_data(t)
                 if df is not None:
                     cur = float(df['Close'].iloc[-1])
@@ -178,17 +177,17 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
                         })
                 bar.progress((i + 1) / len(tickers))
             
-            status.empty() # 清空進度提示
+            status.empty()
             if results:
                 st.session_state.scan_df = pd.DataFrame(results).sort_values(by=sort_key, ascending=False)
                 st.session_state.active_tickers = st.session_state.scan_df['代號'].tolist()
-                st.success(f"🎯 掃描完成！在指定的 {len(tickers)} 檔標的中，成功鎖定 {len(results)} 檔超級強勢股。")
+                st.success(f"🎯 掃描完成！成功鎖定 {len(results)} 檔多頭趨勢股。")
             else:
                 st.session_state.scan_df = None
-                st.warning("⚠️ 當前過濾條件下無標的達標，建議微調技術得分門檻或關閉嚴格大盤過濾。")
+                st.warning("⚠️ 當前門檻下無標的達標。若剛執行過大掃描，Yahoo API 可能暫時限制連線，但技術面過濾引擎仍正常運作。")
 
     if st.session_state.scan_df is not None:
-        st.markdown("##### 終端輸出清單 (Data Matrix)")
+        st.markdown("##### 終端輸出矩陣 (Data Matrix)")
         st.dataframe(
             st.session_state.scan_df, 
             use_container_width=True, 
@@ -201,64 +200,52 @@ if page_mode == "🔍 全自動選股掃描器 (Screener)":
         )
 
 # ==========================================
-# 4. 個股深度分析頁面 (整合雙通道輸入)
+# 4. 個股深度分析頁面
 # ==========================================
 else:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🎯 繪圖目標指定")
+    st.sidebar.subheader("🎯 目標載入指定")
     
-    # 專業化：提供下拉快速連動與獨立輸入雙通道
-    target_source = st.sidebar.radio("載入來源選擇：", ["列表快速連動", "手動輸入特定代號"])
+    target_source = st.sidebar.radio("連動通道：", ["清單快速切換", "手動獨立查詢"])
     
-    if target_source == "列表快速連動":
+    if target_source == "清單快速切換":
         if st.session_state.active_tickers:
-            target = st.sidebar.selectbox("依序檢視掃描清單：", st.session_state.active_tickers)
+            target = st.sidebar.selectbox("檢視掃描成果：", st.session_state.active_tickers)
         else:
-            st.sidebar.warning("清單暫空，請先執行掃描或切換至手動輸入。")
+            st.sidebar.warning("暫無掃描快取，請輸入代號。")
             target = "NVDA"
     else:
-        target = st.sidebar.text_input("✍️ 自訂輸入特定代號：", value="LITE").upper()
+        target = st.sidebar.text_input("✍️ 鍵入特定代號：", value="LITE").upper()
     
     df, fund = get_sepa_data(target)
     if df is not None:
-        st.subheader(f"📊 {target} 核心量價矩陣與動能拆解")
+        st.subheader(f"📊 {target} 動能型態與多空版圖")
         
-        # 專業頂部儀表板
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("即時定價", f"${df['Close'].iloc[-1]:.2f}", f"{df['Close'].iloc[-1] - df['Close'].iloc[-2]:+.2f}")
-        c2.metric("RS 強度 (超額報酬)", f"{((df['Close'].iloc[-1]/df['Close'].iloc[-126])-1-SPY_6M)*100:.1f}%")
-        c3.metric("季度 EPS 爆發力", f"{fund['eps']:.1f}%")
+        c2.metric("RS 強度 (超額表現)", f"{((df['Close'].iloc[-1]/df['Close'].iloc[-126])-1-SPY_6M)*100:.1f}%")
+        c3.metric("季度 EPS 動能", f"{fund['eps']:.1f}%")
         c4.metric("季度營收推力", f"{fund['rev']:.1f}%")
         
         st.markdown("---")
-        tabs = st.tabs(["日K 決策線圖", "周K 波段趨勢", "月K 宏觀結構"])
+        tabs = st.tabs(["日K 決策視角", "周K 波段視角", "月K 宏觀視角"])
         
         def plot_professional(data):
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_width=[0.25, 0.75])
             d = data.tail(252) if len(data) > 252 else data
             
-            # K線主體
-            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='定價軌跡'), row=1, col=1)
-            # 均線系統 (採用高辨識度冷暖配色)
-            fig.add_trace(go.Scatter(x=d.index, y=d['50MA'], name='50MA (短防線)', line=dict(color='#00E5FF', width=1.2)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['150MA'], name='150MA (趨勢線)', line=dict(color='#FFD700', width=1.2)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['200MA'], name='200MA (牛熊界)', line=dict(color='#FF1744', width=1.5)), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='定價'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['50MA'], name='50MA (短防)', line=dict(color='#00E5FF', width=1.2)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['150MA'], name='150MA (趨勢)', line=dict(color='#FFD700', width=1.2)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['200MA'], name='200MA (牛熊)', line=dict(color='#FF1744', width=1.5)), row=1, col=1)
             
-            # 專業成交量柱狀圖 (實體紅綠分離)
             cols = ['#FF5252' if r['Open'] > r['Close'] else '#00E676' for _, r in d.iterrows()]
-            fig.add_trace(go.Bar(x=d.index, y=d['Volume'], name='動能籌碼', marker_color=cols), row=2, col=1)
-            # 均量線
+            fig.add_trace(go.Bar(x=d.index, y=d['Volume'], name='籌碼量能', marker_color=cols), row=2, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['Vol_50MA'], name='50均量基準', line=dict(color='#FF9100', width=1.2)), row=2, col=1)
             
-            # 深度定製圖表版面 (移除多餘邊框，呈現純粹數據流)
             fig.update_layout(
-                height=720, 
-                template="plotly_dark", 
-                xaxis_rangeslider_visible=False, 
-                hovermode="x unified",
-                margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="#0E1117",
-                plot_bgcolor="#0E1117"
+                height=720, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified",
+                margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="#0E1117", plot_bgcolor="#0E1117"
             )
             fig.update_xaxes(showgrid=True, gridcolor='#1F2430', zeroline=False)
             fig.update_yaxes(showgrid=True, gridcolor='#1F2430', zeroline=False)
@@ -278,4 +265,4 @@ else:
                 m_data['Vol_50MA'] = m_data['Volume'].rolling(50).mean()
                 st.plotly_chart(plot_professional(m_data), use_container_width=True)
     else:
-        st.error("❌ 數據載入中斷，請確認代號正確性或嘗試點擊側邊欄『強制清空緩存』。")
+        st.error("❌ 數據解析中斷，請確認輸入正確或點擊側邊欄『強制清空緩存』重置連線。")
